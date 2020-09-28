@@ -38,13 +38,10 @@ const (
 )
 
 var (
-	portGroupExpr          = "(?P<port>\\d+)"
-	urlPrefixExpr          = fmt.Sprintf("CLUSTER_%s_URLPREFIX", portGroupExpr)
-	urlPrefixPattern       = regexp.MustCompile(urlPrefixExpr)
-	serviceNameExpr        = fmt.Sprintf("CLUSTER_%s_NAME", portGroupExpr)
-	serviceNamePattern     = regexp.MustCompile(serviceNameExpr)
-	serviceCategoryExpr    = fmt.Sprintf("CLUSTER_%s_CATEGORY", portGroupExpr)
-	serviceCategoryPattern = regexp.MustCompile(serviceCategoryExpr)
+	portGroupExpr      = "(?P<port>\\d+)"
+	urlPrefixExpr      = fmt.Sprintf("CLUSTER_%s_URLPREFIX", portGroupExpr)
+	serviceNameExpr    = fmt.Sprintf("CLUSTER_%s_NAME", portGroupExpr)
+	serviceNamePattern = regexp.MustCompile(serviceNameExpr)
 )
 
 var (
@@ -54,7 +51,6 @@ var (
 
 type service struct {
 	name      string
-	category  string
 	urlPrefix string
 	version   string
 	port      uint16
@@ -100,6 +96,8 @@ func getServicePorts(container dTypes.Container) []uint16 {
 }
 
 func mapContainerToDiscoverableContainer(container dTypes.Container, servicePorts []uint16) *discoverableContainer {
+	log := logger.New("mapContainerToDiscoverableContainer")
+	defer log.LogDone()
 	labels := container.Labels
 	discoveredContainer := &discoverableContainer{
 		container: container,
@@ -107,16 +105,15 @@ func mapContainerToDiscoverableContainer(container dTypes.Container, servicePort
 	var services []service
 	for _, port := range servicePorts {
 		serviceNameLabelKey := strings.Replace(serviceNameExpr, portGroupExpr, strconv.Itoa(int(port)), 1)
-		serviceCategoryLabelKey := strings.Replace(serviceCategoryExpr, portGroupExpr, strconv.Itoa(int(port)), 1)
 		urlPrefixLabelKey := strings.Replace(urlPrefixExpr, portGroupExpr, strconv.Itoa(int(port)), 1)
-
+		log.Infof("url prefix key %q\n", urlPrefixLabelKey)
 		service := service{
 			name:      labels[serviceNameLabelKey],
-			category:  labels[serviceCategoryLabelKey],
 			urlPrefix: labels[urlPrefixLabelKey],
 			version:   fmt.Sprintf("v%s-%s", labels[versionKey], labels[commitIDKey]),
 			port:      port,
 		}
+		log.Infof("discovered service url prefix - %s\n", service.urlPrefix)
 		services = append(services, service)
 	}
 	discoveredContainer.services = services
@@ -145,13 +142,12 @@ func (ports enPorts) wherePorts(predicate func(dTypes.Port) bool) []dTypes.Port 
 	return matchingPorts
 }
 
-func (ports enPorts) getMappedAddress(portNumber uint16) (mappedHost string, mappedPortNumber uint16) {
+func (ports enPorts) getMappedAddress(portNumber uint16) (mappedPortNumber uint16) {
 	mappedPorts := ports.
 		wherePorts(func(p dTypes.Port) bool {
 			return p.PrivatePort == portNumber
 		})
 	if len(mappedPorts) > 0 {
-		mappedHost = "127.0.0.1"
 		mappedPortNumber = mappedPorts[0].PrivatePort
 	}
 	return
@@ -161,15 +157,12 @@ func (container *discoverableContainer) mapToEndpoints() []types.Endpoint {
 	var endpoints []types.Endpoint
 	dockerContainer := container.container
 	for _, service := range container.services {
-		//todo : cleanup host
-		host, portNumber := enPorts(dockerContainer.Ports).
+		portNumber := enPorts(dockerContainer.Ports).
 			getMappedAddress(service.port)
-		host = dockerContainer.NetworkSettings.Networks["bridge"].IPAddress
-		frontProxyPath := fmt.Sprintf("/%s/%s", service.category,
-			service.name)
-		if service.urlPrefix != "" {
-			frontProxyPath = fmt.Sprintf("/%s/%s", service.category,
-				service.urlPrefix)
+		host := dockerContainer.NetworkSettings.Networks["bridge"].IPAddress
+		frontProxyPath := fmt.Sprintf("/%s", service.name)
+		if len(service.urlPrefix) > 0 {
+			frontProxyPath = service.urlPrefix
 		}
 
 		endpoint := types.Endpoint{
@@ -196,10 +189,10 @@ func (session *Session) getEndpointUpdateRequest() *types.EndpointUpdateRequest 
 	log := logger.New("getEndpointUpdateRequest")
 	defer log.LogDone()
 	api := session.api
-	filters := filters.NewArgs()
-	filters.Add("status", "running")
+	containerFilters := filters.NewArgs()
+	containerFilters.Add("status", "running")
 	containers, err := api.ContainerList(appContext, dTypes.ContainerListOptions{
-		Filters: filters,
+		Filters: containerFilters,
 	})
 	if err != nil {
 		log.Warnf("error listing container, %s", err.Error())
@@ -240,11 +233,11 @@ func (session *Session) Run() chan *types.EndpointUpdateRequest {
 	appContext := ctx.GetContext()
 	api := session.api
 
-	filters := filters.NewArgs()
-	filters.Add("event", string(EventStart))
-	filters.Add("event", string(EventDie))
+	eventFilters := filters.NewArgs()
+	eventFilters.Add("event", string(EventStart))
+	eventFilters.Add("event", string(EventDie))
 	eventsOptions := dTypes.EventsOptions{
-		Filters: filters,
+		Filters: eventFilters,
 	}
 	log.Info("connecting to events channel...")
 	eventsChannel, errChannel := api.Events(appContext, eventsOptions)

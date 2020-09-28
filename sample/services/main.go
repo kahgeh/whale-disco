@@ -9,7 +9,10 @@ import (
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Add("Content-Type", "application/json")
-		fmt.Fprintf(w, "{ \"hello from\": \"%s\" }\n", os.Getenv("CONTAINER_NAME"))
+		fmt.Fprintf(w, "{ \"hello from\": \"%s\", \"path\": %q }\n", os.Getenv("CONTAINER_NAME"), request.URL)
 	})
-	http.ListenAndServe(":80", nil)
+	err := http.ListenAndServe(":80", nil)
+	if err != nil {
+		fmt.Printf("%s\n", err.Error())
+	}
 }
