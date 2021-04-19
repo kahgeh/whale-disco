@@ -1,9 +1,5 @@
 name: whale-disco PR Check 
-on: 
-  push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
+on: [push]
 jobs:
   Explore-GitHub-Actions:
     runs-on: ubuntu-latest
